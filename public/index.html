@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Math Utils Web API</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 400px; margin: 40px auto; padding: 20px; text-align: center; border: 1px solid #ccc; border-radius: 8px; }
+        input, button { margin-top: 10px; padding: 10px; font-size: 16px; width: 100%; box-sizing: border-box; }
+        #result { margin-top: 20px; font-weight: bold; font-size: 20px; color: green; }
+    </style>
+</head>
+<body>
+    <h2>Add Two Numbers</h2>
+    <input type="number" id="numA" placeholder="First number">
+    <input type="number" id="numB" placeholder="Second number">
+    <button onclick="calculate()">Calculate</button>
+    <div id="result"></div>
+
+    <script>
+        async function calculate() {
+            const a = parseFloat(document.getElementById('numA').value);
+            const b = parseFloat(document.getElementById('numB').value);
+            
+            if (isNaN(a) || isNaN(b)) {
+                return alert('Please enter valid numbers');
+            }
+            
+            try {
+                const response = await fetch('/sum', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ a, b })
+                });
+                const data = await response.json();
+                if (data.error) {
+                    document.getElementById('result').innerText = `Error: ${data.error}`;
+                    document.getElementById('result').style.color = "red";
+                } else {
+                    document.getElementById('result').innerText = `Result: ${data.result}`;
+                    document.getElementById('result').style.color = "green";
+                }
+            } catch (err) {
+                document.getElementById('result').innerText = `Error connecting to API`;
+                document.getElementById('result').style.color = "red";
+            }
+        }
+    </script>
+</body>
+</html>
