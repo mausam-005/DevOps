@@ -1,0 +1,17 @@
+{
+  "name": "math-utils",
+  "version": "1.0.0",
+  "description": "basic math functions and tests",
+  "main": "src/sum.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/sum.test.js && node tests/api.test.js",
+    "lint": "eslint src/"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
