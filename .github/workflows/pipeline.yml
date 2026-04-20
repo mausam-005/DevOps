@@ -1,0 +1,177 @@
+name: CI/CD — Test, Build & Deploy
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  PROJECT_NAME: math-api
+  TF_VAR_subnet_id: ${{ secrets.AWS_SUBNET_ID }}
+  TF_VAR_security_group_id: ${{ secrets.AWS_SECURITY_GROUP_ID }}
+
+jobs:
+  # ─────────────────────────────────────────
+  # Phase 1 — Automated Testing
+  # ─────────────────────────────────────────
+  test:
+    name: "Phase 1: Lint & Test"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Run ESLint static analysis
+        run: npm run lint
+
+      - name: Execute unit + integration tests
+        run: npm test
+
+      - name: Archive JUnit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-test-reports
+          path: test-reports/
+          retention-days: 30
+
+  # ─────────────────────────────────────────
+  # Phase 2 — Infrastructure Provisioning
+  # ─────────────────────────────────────────
+  infra:
+    name: "Phase 2: Terraform Apply"
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Initialize Terraform providers
+        run: terraform init -input=false
+
+      - name: Validate Terraform syntax
+        run: terraform validate
+
+      - name: Generate execution plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Provision AWS resources
+        run: terraform apply -input=false -auto-approve tfplan
+
+  # ─────────────────────────────────────────
+  # Phase 3a — Container Image Build
+  # ─────────────────────────────────────────
+  container:
+    name: "Phase 3: Docker → ECR"
+    needs: infra
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.push.outputs.image }}
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Authenticate with ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push container image
+        id: push
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t $REGISTRY/$PROJECT_NAME:$TAG \
+            -t $REGISTRY/$PROJECT_NAME:latest .
+
+          docker push $REGISTRY/$PROJECT_NAME:$TAG
+          docker push $REGISTRY/$PROJECT_NAME:latest
+
+          echo "image=$REGISTRY/$PROJECT_NAME:$TAG" >> $GITHUB_OUTPUT
+
+  # ─────────────────────────────────────────
+  # Phase 3b — ECS Fargate Deployment
+  # ─────────────────────────────────────────
+  deploy:
+    name: "Phase 3: Deploy to Fargate"
+    needs: container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $PROJECT_NAME-task \
+            --query taskDefinition > task-definition.json
+
+      - name: Inject new image into task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.PROJECT_NAME }}
+          image: ${{ needs.container.outputs.image_uri }}
+
+      - name: Roll out updated service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.PROJECT_NAME }}-service
+          cluster: ${{ env.PROJECT_NAME }}-cluster
+          wait-for-service-stability: true
+
+      - name: Confirm healthy deployment
+        run: |
+          RUNNING=$(aws ecs describe-services \
+            --cluster $PROJECT_NAME-cluster \
+            --services $PROJECT_NAME-service \
+            --query 'services[0].runningCount' \
+            --output text)
+
+          echo "Active tasks: $RUNNING"
+          [ "$RUNNING" -ge 1 ] || (echo "Deployment failed — 0 running tasks" && exit 1)
+          echo "Deployment healthy"
