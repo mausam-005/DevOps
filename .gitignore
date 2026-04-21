@@ -2,3 +2,12 @@ node_modules/
 .DS_Store
 package-lock.json
 build_output/
+test-reports/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/*.tfplan
+terraform/tfplan
+terraform/.terraform.lock.hcl
