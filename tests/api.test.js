@@ -1,30 +1,48 @@
 const http = require('http');
 const app = require('../server');
-const assert = require('assert');
 
-const PORT = 3001;
-const server = http.createServer(app);
+let server;
 
-server.listen(PORT, async () => {
-    console.log("integration testing starting...");
-    try {
-        const response = await fetch(`http://localhost:${PORT}/sum`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ a: 10, b: 20 })
-        });
+beforeAll((done) => {
+  server = http.createServer(app);
+  server.listen(3001, done);
+});
 
-        const data = await response.json();
-        if (data.result !== 30) {
-            console.error(`expected 30, got ${data.result}`);
-            process.exit(1);
-        }
+afterAll((done) => {
+  server.close(done);
+});
 
-        console.log("integration test passed: 10 + 20 = 30 via API");
-        server.close(() => process.exit(0));
+describe('POST /sum API — integration tests', () => {
+  test('returns correct sum for valid input (10 + 20 = 30)', async () => {
+    const response = await fetch('http://localhost:3001/sum', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a: 10, b: 20 }),
+    });
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.result).toBe(30);
+  });
 
-    } catch (err) {
-        console.error("test failed with error", err);
-        server.close(() => process.exit(1));
-    }
+  test('returns 400 for non-numeric input', async () => {
+    const response = await fetch('http://localhost:3001/sum', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a: 'hello', b: 20 }),
+    });
+    const data = await response.json();
+    expect(response.status).toBe(400);
+    expect(data.error).toBeDefined();
+  });
+
+  test('handles negative numbers via API', async () => {
+    const response = await fetch('http://localhost:3001/sum', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a: -5, b: -10 }),
+    });
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.result).toBe(-15);
+  });
 });
