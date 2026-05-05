@@ -11,6 +11,7 @@ env:
   PROJECT_NAME: math-api
   TF_VAR_subnet_id: ${{ secrets.AWS_SUBNET_ID }}
   TF_VAR_security_group_id: ${{ secrets.AWS_SECURITY_GROUP_ID }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ─────────────────────────────────────────
@@ -90,8 +91,6 @@ jobs:
     name: "Phase 3: Docker → ECR"
     needs: infra
     runs-on: ubuntu-latest
-    outputs:
-      image_uri: ${{ steps.push.outputs.image }}
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -121,8 +120,6 @@ jobs:
           docker push $REGISTRY/$PROJECT_NAME:$TAG
           docker push $REGISTRY/$PROJECT_NAME:latest
 
-          echo "image=$REGISTRY/$PROJECT_NAME:$TAG" >> $GITHUB_OUTPUT
-
   # ─────────────────────────────────────────
   # Phase 3b — ECS Fargate Deployment
   # ─────────────────────────────────────────
@@ -142,6 +139,10 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Authenticate with ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
       - name: Fetch current task definition
         run: |
           aws ecs describe-task-definition \
@@ -154,7 +155,7 @@ jobs:
         with:
           task-definition: task-definition.json
           container-name: ${{ env.PROJECT_NAME }}
-          image: ${{ needs.container.outputs.image_uri }}
+          image: ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT_NAME }}:${{ github.sha }}
 
       - name: Roll out updated service
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
